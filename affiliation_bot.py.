@@ -1,0 +1,665 @@
+“””
+╔══════════════════════════════════════════════════════════════╗
+║     BOT AFFILIATION — Top Deals                              ║
+║     Telegram + Twitter/X + Facebook                          ║
+║     Liens directs produits + tag Amazon topdealsjost-21      ║
+║     Amazon + Fnac + Cdiscount                                ║
+╚══════════════════════════════════════════════════════════════╝
+
+INSTALLATION :
+pip install requests beautifulsoup4 tweepy
+
+CONFIGURATION :
+
+1. Remplis les variables de config ci-dessous
+1. Crée ton canal Telegram public ex: @topdealsjost
+1. Ajoute ton bot comme admin du canal
+1. Lance : python affiliation_bot.py
+   “””
+
+import requests
+import time
+import re
+import random
+from datetime import datetime
+from bs4 import BeautifulSoup
+
+# ════════════════════════════════════════════════════════
+
+# ⚙️  CONFIGURATION
+
+# ════════════════════════════════════════════════════════
+
+# ── Telegram ──
+
+TELEGRAM_TOKEN   = “8774069021:AAG3BZQoCbGRzYP4B1ksA3pbjQ_TwJ4rqtk”
+TELEGRAM_CHANNEL = “@topdealsjost”           # Ton canal public
+TELEGRAM_CHAT_ID = “8559815820”              # Ton ID perso
+
+# ── Twitter/X (optionnel) ──
+
+TWITTER_API_KEY             = “COLLE_ICI”
+TWITTER_API_SECRET          = “COLLE_ICI”
+TWITTER_ACCESS_TOKEN        = “COLLE_ICI”
+TWITTER_ACCESS_TOKEN_SECRET = “COLLE_ICI”
+
+# ── Facebook (optionnel) ──
+
+FACEBOOK_PAGE_ID    = “COLLE_TON_PAGE_ID”
+FACEBOOK_PAGE_TOKEN = “COLLE_TON_TOKEN_PAGE”
+
+# ── IDs Affiliation ──
+
+AMAZON_TAG     = “topdealsjost-21”   # ✅ TON TAG AMAZON
+FNAC_ID        = “COLLE_TON_ID”      # awin.com → programme Fnac
+CDISCOUNT_ID   = “COLLE_TON_ID”      # awin.com → programme Cdiscount
+
+# ── Paramètres ──
+
+CHECK_INTERVAL   = 1800   # Scan toutes les 30 minutes
+MIN_DISCOUNT_PCT = 40     # Réduction minimum pour publier
+MAX_POSTS        = 5      # Max publications par scan
+
+# ════════════════════════════════════════════════════════
+
+# 🔗  CONSTRUCTION DES LIENS AFFILIÉS DIRECTS
+
+# Le lien amène DIRECTEMENT sur la page produit Amazon
+
+# avec ton tag intégré → commission garantie si achat
+
+# ════════════════════════════════════════════════════════
+
+def build_amazon_link(asin, url=None):
+“””
+Construit le lien affilié Amazon direct vers le produit.
+Format : amazon.fr/dp/ASIN?tag=topdealsjost-21
+Ce lien amène directement sur la page du produit
+avec ton tag affilié intégré.
+“””
+if asin:
+# Lien direct produit avec tag affilié
+return f”https://www.amazon.fr/dp/{asin}?tag={AMAZON_TAG}”
+elif url:
+# Si on a l’URL complète, on ajoute juste le tag
+clean_url = url.split(”?”)[0]  # Enlève les paramètres existants
+return f”{clean_url}?tag={AMAZON_TAG}”
+return “”
+
+def build_fnac_link(url):
+“”“Lien affilié Fnac direct vers le produit.”””
+if not url or FNAC_ID == “COLLE_TON_ID”:
+return url
+clean = url.split(”?”)[0]
+return f”{clean}?affid={FNAC_ID}”
+
+def build_cdiscount_link(url):
+“”“Lien affilié Cdiscount direct vers le produit.”””
+if not url or CDISCOUNT_ID == “COLLE_TON_ID”:
+return url
+clean = url.split(”?”)[0]
+return f”{clean}?aff={CDISCOUNT_ID}”
+
+# ════════════════════════════════════════════════════════
+
+# ✍️  PHRASES PERSONNALISÉES
+
+# ════════════════════════════════════════════════════════
+
+PHRASES = {
+“telegram”: [
+“🔥 Bonne affaire détectée, fonce avant que ça parte !”,
+“💸 Cette réduction est folle, regarde ça —”,
+“⚡ Vente flash ! T’as pas le temps de réfléchir —”,
+“🎯 Le bon plan du jour que tu vas adorer —”,
+“🚨 Alerte bon plan ! -{discount}% c’est pas tous les jours —”,
+“👀 Regarde ce que j’ai trouvé pour toi aujourd’hui —”,
+“💡 Si t’allais acheter ça de toute façon, c’est le moment —”,
+“🏆 Meilleur rapport qualité/prix de la semaine —”,
+“🤑 {savings}€ d’économie sur ce produit, profites-en —”,
+“⏰ Ce genre d’offre disparaît en quelques heures —”,
+],
+“twitter”: [
+“🔥 -{discount}% sur {title} ! Économise {savings}€ 👇 #BonPlan #Promo #Deal”,
+“💸 PROMO -{discount}% : {title} à {price}€ au lieu de {old}€ 🎯 #Deal #Soldes”,
+“⚡ FLASH -{discount}% ! {title} seulement {price}€ 🛒 #BonPlan #TopDeal”,
+“🚨 -{discount}% MAINTENANT sur {title} ! {savings}€ économisés 👇 #Deal”,
+“💡 {title} à -{discount}% = {price}€ ! C’est le moment 🎁 #BonPlan”,
+“🏆 Meilleur prix du moment : {title} {price}€ (-{discount}%) ! #TopDeal”,
+],
+“facebook”: [
+“🔥 BON PLAN DU JOUR 🔥\n\nJe ne pouvais pas garder ça pour moi !\n\n{title} à seulement {price}€ au lieu de {old}€ — soit -{discount}% et {savings}€ d’économie !\n\nCe genre d’offre disparaît en quelques heures. Fonce vite 👇\n\n👍 Like et partage pour aider tes amis à économiser !”,
+“💸 ÉCONOMISE {savings}€ AUJOURD’HUI 💸\n\nSi t’avais prévu d’acheter {title}, c’est LE moment.\n\n✅ Prix actuel : {price}€\n❌ Prix normal : {old}€\n💰 Réduction : -{discount}%\n\nLien direct ci-dessous 👇”,
+“🚨 ALERTE BON PLAN 🚨\n\n{title}\n\nDe {old}€ → {price}€ seulement !\nSoit {savings}€ d’économie immédiate ({discount}% de réduction) !\n\nFonce avant que ça remonte 👇\n\n❤️ Partage à quelqu’un qui cherchait ça !”,
+“🎯 LE BON PLAN QU’IL NE FAUT PAS RATER 🎯\n\n{title} à {price}€ — oui tu as bien lu.\n\nNormalement {old}€, soit -{discount}% de remise et {savings}€ dans ta poche.\n\nJe partage tout ce que je trouve pour aider ma communauté à économiser 💪\n\nLien direct 👇”,
+],
+}
+
+def get_phrase(platform, deal):
+phrases = PHRASES.get(platform, PHRASES[“telegram”])
+phrase  = random.choice(phrases)
+try:
+return phrase.format(
+title    = deal[“title”][:50],
+price    = deal[“price”],
+old      = deal[“old_price”],
+discount = deal[“discount_pct”],
+savings  = deal[“savings”],
+)
+except:
+return phrase
+
+# ════════════════════════════════════════════════════════
+
+# 🏷️  CATÉGORIES — Toutes niches confondues
+
+# ════════════════════════════════════════════════════════
+
+CATEGORIES = {
+“💪 Sport & Fitness”: [
+“haltère”, “tapis de course”, “vélo elliptique”, “kettlebell”,
+“protéine whey”, “shaker sport”, “gants musculation”,
+“banc de musculation”, “corde à sauter”, “tapis yoga”,
+“barre de traction”, “poids fonte”,
+],
+“👟 Mode & Sneakers”: [
+“sneakers homme”, “baskets running”, “nike homme”,
+“adidas homme”, “veste sport homme”, “hoodie homme”,
+“jogging homme”, “casquette sport”, “sac à dos sport”,
+],
+“💻 Tech & High-Tech”: [
+“écouteurs sans fil”, “casque bluetooth”, “montre connectée”,
+“tablette android”, “chargeur rapide”, “enceinte bluetooth”,
+“souris gaming”, “clavier mécanique”, “webcam hd”,
+“disque dur externe”, “samsung”, “apple”,
+],
+“🥗 Nutrition & Santé”: [
+“whey protéine”, “créatine monohydrate”, “bcaa acides aminés”,
+“multivitamines homme”, “omega 3 fish oil”, “collagène marin”,
+“pre workout”, “barre protéinée”, “vitamine d3”, “magnésium”,
+],
+“🏠 Maison & Cuisine”: [
+“friteuse à air”, “robot cuisine multifonction”,
+“machine café automatique”, “aspirateur robot”, “matelas memoire”,
+“lampe led bureau”, “cafetière”, “blender”, “grille pain”,
+],
+“🎮 Gaming & Jeux”: [
+“manette ps5”, “jeux ps5”, “nintendo switch jeux”,
+“casque gaming”, “chaise gaming”, “écran gaming”,
+],
+“🌟 Beauté & Soin”: [
+“parfum homme”, “crème visage homme”, “brosse à dents électrique”,
+“rasoir électrique”, “sérum visage”,
+],
+“📚 Livres”: [
+“développement personnel bestseller”, “psychologie livre”,
+“mindset livre”, “business livre”, “nutrition sport livre”,
+],
+“🐾 Animaux”: [
+“croquettes chien”, “litière chat”, “jouet chien”,
+“gamelle automatique”, “GPS chien”,
+],
+“🧸 Enfants & Jouets”: [
+“lego technic”, “jeu de société famille”,
+“jouet bébé”, “trottinette enfant”, “vélo enfant”,
+],
+}
+
+# ════════════════════════════════════════════════════════
+
+# 🛒  SCRAPING — AMAZON
+
+# ════════════════════════════════════════════════════════
+
+HEADERS_LIST = [
+{
+“User-Agent”: “Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36”,
+“Accept-Language”: “fr-FR,fr;q=0.9”,
+“Accept”: “text/html,application/xhtml+xml,*/*;q=0.8”,
+},
+{
+“User-Agent”: “Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/121.0.0.0 Safari/537.36”,
+“Accept-Language”: “fr-FR,fr;q=0.9,en;q=0.8”,
+},
+]
+
+def get_h():
+return random.choice(HEADERS_LIST)
+
+amazon_session = requests.Session()
+
+def scrape_amazon(keyword):
+deals = []
+try:
+params = {
+“k”:  keyword,
+“s”:  “price-asc-rank”,
+“rh”: “p_n_deal_type:23566064031”,  # Filtre promos
+}
+r = amazon_session.get(
+“https://www.amazon.fr/s”,
+params=params, headers=get_h(), timeout=12
+)
+if r.status_code != 200:
+return deals
+
+```
+    soup  = BeautifulSoup(r.text, "html.parser")
+    items = soup.select("[data-component-type='s-search-result']")
+
+    for item in items[:10]:
+        try:
+            # Titre
+            title_el = item.select_one("h2 a span")
+            if not title_el: continue
+            title = title_el.get_text(strip=True)
+
+            # ASIN — clé pour construire le lien direct produit
+            asin = item.get("data-asin", "")
+            if not asin: continue
+
+            # Lien direct vers la page produit avec tag affilié
+            product_url = build_amazon_link(asin)
+
+            # Prix actuel
+            price_el = item.select_one(".a-price .a-offscreen")
+            if not price_el: continue
+            price_str = price_el.get_text(strip=True)
+            price_match = re.search(r'[\d,]+', price_str.replace(".", "").replace(",", "."))
+            if not price_match: continue
+            price = float(price_str.replace("€","").replace(" ","").replace(",",".").split()[0])
+
+            # Prix original barré
+            old_el = item.select_one(".a-price.a-text-price .a-offscreen")
+            if not old_el: continue
+            old_price = float(old_el.get_text(strip=True).replace("€","").replace(" ","").replace(",",".").split()[0])
+
+            if old_price <= price or old_price == 0: continue
+            disc = int((old_price - price) / old_price * 100)
+            if disc < MIN_DISCOUNT_PCT: continue
+
+            # Image du produit
+            img_el  = item.select_one(".s-image")
+            img_url = img_el.get("src", "") if img_el else ""
+
+            # Note et avis
+            rating_el  = item.select_one(".a-icon-star-small .a-icon-alt")
+            reviews_el = item.select_one("[aria-label*='étoiles'] + span")
+            rating     = rating_el.get_text(strip=True)[:3] if rating_el else "?"
+            reviews    = reviews_el.get_text(strip=True) if reviews_el else "?"
+
+            deals.append({
+                "source":       "Amazon",
+                "emoji":        "🟠",
+                "title":        title[:80],
+                "asin":         asin,
+                "price":        price,
+                "old_price":    old_price,
+                "discount_pct": disc,
+                "savings":      round(old_price - price, 2),
+                "link":         product_url,  # Lien direct produit + tag affilié
+                "img_url":      img_url,
+                "rating":       rating,
+                "reviews":      reviews,
+            })
+        except:
+            continue
+
+    time.sleep(random.uniform(2.0, 3.5))
+except Exception as e:
+    print(f"  [Amazon] Erreur '{keyword}': {e}")
+return deals
+```
+
+# ════════════════════════════════════════════════════════
+
+# 🛍️  SCRAPING — FNAC
+
+# ════════════════════════════════════════════════════════
+
+fnac_session = requests.Session()
+
+def scrape_fnac(keyword):
+deals = []
+try:
+params = {“SearchText”: keyword}
+r = fnac_session.get(
+“https://www.fnac.com/SearchResult/ResultSet.aspx”,
+params=params, headers=get_h(), timeout=12
+)
+if r.status_code != 200: return deals
+
+```
+    soup  = BeautifulSoup(r.text, "html.parser")
+    items = soup.select(".Article-itemWrapper")[:6]
+
+    for item in items:
+        try:
+            title_el     = item.select_one(".Article-desc")
+            price_el     = item.select_one(".userPrice")
+            old_price_el = item.select_one(".oldPrice")
+            link_el      = item.select_one("a.Article-content")
+            if not all([title_el, price_el, old_price_el, link_el]): continue
+
+            price     = float(re.search(r'[\d.]+', price_el.get_text().replace(",",".").replace("\xa0","")).group())
+            old_price = float(re.search(r'[\d.]+', old_price_el.get_text().replace(",",".").replace("\xa0","")).group())
+
+            if old_price <= price: continue
+            disc = int((old_price - price) / old_price * 100)
+            if disc < MIN_DISCOUNT_PCT: continue
+
+            href = link_el.get("href", "")
+            if not href.startswith("http"): href = "https://www.fnac.com" + href
+
+            deals.append({
+                "source":       "Fnac",
+                "emoji":        "🟡",
+                "title":        title_el.get_text(strip=True)[:80],
+                "price":        price,
+                "old_price":    old_price,
+                "discount_pct": disc,
+                "savings":      round(old_price - price, 2),
+                "link":         build_fnac_link(href),
+                "img_url":      "",
+                "rating":       "?",
+                "reviews":      "?",
+            })
+        except:
+            continue
+
+    time.sleep(random.uniform(1.5, 2.5))
+except Exception as e:
+    print(f"  [Fnac] Erreur '{keyword}': {e}")
+return deals
+```
+
+# ════════════════════════════════════════════════════════
+
+# 💸  SCRAPING — CDISCOUNT
+
+# ════════════════════════════════════════════════════════
+
+cdiscount_session = requests.Session()
+
+def scrape_cdiscount(keyword):
+deals = []
+try:
+params = {“q”: keyword}
+r = cdiscount_session.get(
+“https://www.cdiscount.com/search/10/”,
+params=params, headers=get_h(), timeout=12
+)
+if r.status_code != 200: return deals
+
+```
+    soup  = BeautifulSoup(r.text, "html.parser")
+    items = soup.select(".prdtBId")[:6]
+
+    for item in items:
+        try:
+            title_el     = item.select_one(".prdtHead h3")
+            price_el     = item.select_one(".price span")
+            old_price_el = item.select_one(".oldprice")
+            link_el      = item.select_one("a.prdtBlkLnk")
+            if not all([title_el, price_el, old_price_el, link_el]): continue
+
+            price     = float(re.search(r'[\d.]+', price_el.get_text().replace(",",".").replace("\xa0","")).group())
+            old_price = float(re.search(r'[\d.]+', old_price_el.get_text().replace(",",".").replace("\xa0","")).group())
+
+            if old_price <= price: continue
+            disc = int((old_price - price) / old_price * 100)
+            if disc < MIN_DISCOUNT_PCT: continue
+
+            href = link_el.get("href","")
+            if not href.startswith("http"): href = "https://www.cdiscount.com" + href
+
+            deals.append({
+                "source":       "Cdiscount",
+                "emoji":        "🔴",
+                "title":        title_el.get_text(strip=True)[:80],
+                "price":        price,
+                "old_price":    old_price,
+                "discount_pct": disc,
+                "savings":      round(old_price - price, 2),
+                "link":         build_cdiscount_link(href),
+                "img_url":      "",
+                "rating":       "?",
+                "reviews":      "?",
+            })
+        except:
+            continue
+
+    time.sleep(random.uniform(1.5, 2.5))
+except Exception as e:
+    print(f"  [Cdiscount] Erreur '{keyword}': {e}")
+return deals
+```
+
+# ════════════════════════════════════════════════════════
+
+# 📊  SCORE DE L’OFFRE
+
+# ════════════════════════════════════════════════════════
+
+def score_deal(deal):
+score = 0
+d = deal[“discount_pct”]
+if d >= 70:    score += 50
+elif d >= 60:  score += 40
+elif d >= 50:  score += 30
+else:          score += 20
+
+```
+s = deal["savings"]
+if s >= 200:   score += 30
+elif s >= 100: score += 20
+elif s >= 50:  score += 10
+elif s >= 20:  score += 5
+
+try:
+    r = float(deal.get("rating","0").replace(",","."))
+    if r >= 4.5: score += 10
+    elif r >= 4: score += 5
+except: pass
+
+return score
+```
+
+# ════════════════════════════════════════════════════════
+
+# 📲  PUBLICATIONS
+
+# ════════════════════════════════════════════════════════
+
+def format_telegram_msg(deal, category):
+phrase = get_phrase(“telegram”, deal)
+rating_line = “”
+if deal.get(“rating”, “?”) != “?”:
+rating_line = f”⭐ {deal[‘rating’]}”
+if deal.get(“reviews”,”?”) != “?”:
+rating_line += f” ({deal[‘reviews’]} avis)”
+rating_line += “\n”
+
+```
+return (
+    f"{phrase}\n\n"
+    f"{deal['emoji']} <b>{deal['source']}</b> — {category}\n\n"
+    f"🛍️ <b>{deal['title']}</b>\n\n"
+    f"💰 <b>{deal['price']}€</b>  ~~<s>{deal['old_price']}€</s>~~\n"
+    f"🏷️ <b>-{deal['discount_pct']}%</b> → tu économises <b>{deal['savings']}€</b>\n"
+    f"{rating_line}\n"
+    f"👉 <a href=\"{deal['link']}\">VOIR LE PRODUIT →</a>\n\n"
+    f"📢 {TELEGRAM_CHANNEL}\n"
+    f"⏰ {datetime.now().strftime('%H:%M — %d/%m/%Y')}"
+)
+```
+
+def post_telegram(deal, category):
+base = f”https://api.telegram.org/bot{TELEGRAM_TOKEN}”
+msg  = format_telegram_msg(deal, category)
+
+```
+if deal.get("img_url"):
+    payload  = {"chat_id": TELEGRAM_CHANNEL, "photo": deal["img_url"],
+                "caption": msg[:1024], "parse_mode": "HTML"}
+    endpoint = f"{base}/sendPhoto"
+else:
+    payload  = {"chat_id": TELEGRAM_CHANNEL, "text": msg,
+                "parse_mode": "HTML", "disable_web_page_preview": False}
+    endpoint = f"{base}/sendMessage"
+
+try:
+    r = requests.post(endpoint, json=payload, timeout=10)
+    return r.status_code == 200
+except Exception as e:
+    print(f"  [Telegram] {e}"); return False
+```
+
+def post_twitter(deal):
+if “COLLE” in TWITTER_API_KEY:
+return False
+try:
+import tweepy
+client = tweepy.Client(
+consumer_key        = TWITTER_API_KEY,
+consumer_secret     = TWITTER_API_SECRET,
+access_token        = TWITTER_ACCESS_TOKEN,
+access_token_secret = TWITTER_ACCESS_TOKEN_SECRET,
+)
+phrase = get_phrase(“twitter”, deal)
+tweet  = f”{phrase}\n\n{deal[‘link’]}”
+if len(tweet) > 280:
+tweet = f”{phrase[:200]}…\n\n{deal[‘link’]}”
+client.create_tweet(text=tweet)
+return True
+except Exception as e:
+print(f”  [Twitter] {e}”); return False
+
+def post_facebook(deal):
+if “COLLE” in FACEBOOK_PAGE_TOKEN:
+return False
+try:
+phrase = get_phrase(“facebook”, deal)
+msg    = f”{phrase}\n\n🔗 {deal[‘link’]}”
+payload = {“message”: msg, “access_token”: FACEBOOK_PAGE_TOKEN}
+endpoint = f”https://graph.facebook.com/v19.0/{FACEBOOK_PAGE_ID}/feed”
+r = requests.post(endpoint, data=payload, timeout=10)
+return r.status_code == 200
+except Exception as e:
+print(f”  [Facebook] {e}”); return False
+
+def publish_everywhere(deal, category):
+results = {}
+results[“telegram”] = post_telegram(deal, category)
+time.sleep(2)
+results[“twitter”]  = post_twitter(deal)
+time.sleep(2)
+results[“facebook”] = post_facebook(deal)
+
+```
+ok = [p for p, v in results.items() if v]
+print(f"    ✅ Publié : {', '.join(ok) if ok else 'aucune plateforme'}")
+return results
+```
+
+# ════════════════════════════════════════════════════════
+
+# 🔄  BOUCLE PRINCIPALE
+
+# ════════════════════════════════════════════════════════
+
+already_published = set()
+
+def scan_and_publish():
+all_deals = []
+print(f”[{datetime.now().strftime(’%H:%M’)}] Scan des offres…”)
+
+```
+for cat_name, keywords in CATEGORIES.items():
+    sample = random.sample(keywords, min(2, len(keywords)))
+    for kw in sample:
+        print(f"  → {cat_name} : '{kw}'")
+        deals = (
+            scrape_amazon(kw) +
+            scrape_fnac(kw) +
+            scrape_cdiscount(kw)
+        )
+        for d in deals:
+            d["category"] = cat_name
+            d["score"]    = score_deal(d)
+            all_deals.append(d)
+        time.sleep(1)
+
+# Tri par score
+all_deals.sort(key=lambda x: x["score"], reverse=True)
+
+published = 0
+for deal in all_deals:
+    if published >= MAX_POSTS: break
+    key = f"{deal['title'][:20]}{deal['price']}".replace(" ","")
+    if key in already_published: continue
+    already_published.add(key)
+
+    print(f"\n  📢 {deal['source']} | {deal['title'][:40]} | -{deal['discount_pct']}% | {deal['link'][:50]}")
+    publish_everywhere(deal, deal["category"])
+    published += 1
+    time.sleep(5)
+
+return published
+```
+
+# ════════════════════════════════════════════════════════
+
+# 🚀  MAIN
+
+# ════════════════════════════════════════════════════════
+
+def main():
+print(”=” * 65)
+print(”   BOT AFFILIATION — TOP DEALS”)
+print(f”   Tag Amazon  : {AMAZON_TAG}”)
+print(f”   Canal       : {TELEGRAM_CHANNEL}”)
+print(f”   Plateformes : Telegram + Twitter + Facebook”)
+print(f”   Sources     : Amazon + Fnac + Cdiscount”)
+print(f”   Réduction   : -{MIN_DISCOUNT_PCT}% minimum”)
+print(f”   Intervalle  : {CHECK_INTERVAL // 60} minutes”)
+print(”=” * 65)
+
+```
+if "COLLE" in TELEGRAM_TOKEN:
+    print("\n⚠️  Configure TELEGRAM_TOKEN !")
+    print("   @BotFather → /newbot → copie le token\n")
+    return
+
+requests.post(
+    f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+    json={
+        "chat_id":    TELEGRAM_CHAT_ID,
+        "text":       (
+            f"🤖 <b>Bot Top Deals démarré !</b>\n\n"
+            f"🔗 Tag Amazon : <code>{AMAZON_TAG}</code>\n"
+            f"📢 Canal : {TELEGRAM_CHANNEL}\n\n"
+            f"📡 Plateformes actives :\n"
+            f"  • Telegram ✅\n"
+            f"  • Twitter {'✅' if 'COLLE' not in TWITTER_API_KEY else '❌ à configurer'}\n"
+            f"  • Facebook {'✅' if 'COLLE' not in FACEBOOK_PAGE_TOKEN else '❌ à configurer'}\n\n"
+            f"🛒 Sources : Amazon + Fnac + Cdiscount\n"
+            f"📦 {len(CATEGORIES)} catégories | -{MIN_DISCOUNT_PCT}% min\n\n"
+            f"🟢 Premier scan en cours..."
+        ),
+        "parse_mode": "HTML",
+    },
+    timeout=10
+)
+
+cycle = 0
+while True:
+    cycle += 1
+    print(f"\n══ SCAN #{cycle} ══ {datetime.now().strftime('%H:%M:%S')} ══")
+    published = scan_and_publish()
+    print(f"══ FIN #{cycle} ══ {published} deal(s) publié(s) | Prochain dans {CHECK_INTERVAL // 60}min")
+    time.sleep(CHECK_INTERVAL)
+```
+
+if **name** == “**main**”:
+main()
